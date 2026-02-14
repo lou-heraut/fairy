@@ -1,0 +1,673 @@
+# Copyright 2021-2026 Louis Héraut (louis.heraut@inrae.fr)*1
+#
+# *1   INRAE, UR RiverLy, Villeurbanne, France
+#
+# This file is part of fairy R package.
+#
+# fairy R package is free software: you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# fairy R package is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with fairy R package.
+# If not, see <https://www.gnu.org/licenses/>.
+
+
+## 1. WRITING ________________________________________________________
+#' @title write_tibble
+#' @description Writes a [dplyr::tibble()] or a list of [dplyr::tibble()].
+#' @param tbl [dplyr::tibble()] to write.
+#' @param path *tibble, default="data.csv"* Path were the file will be writted.
+#' @details This set of [read_tibble()] and [write_tibble()] functions support `.Rdata`, `.txt` and `.fst` format.
+#' @examples
+#' # load data
+#' data("iris")
+#' # convert data
+#' iris = dplyr::tibble(iris)
+#' iris$Species = as.character(iris$Species)
+#' 
+#' # writes a tibble
+#' write_tibble(iris, path="iris.csv")
+#' # or a list of tibble
+#' iris_setosa = iris[iris$Species == "setosa",]
+#' iris_virginica = iris[iris$Species == "virginica",]
+#' iris_selection = list(setosa=iris_setosa, virginica=iris_virginica)
+#' write_tibble(iris_selection, path="iris_selection.csv")
+#' @md
+#' @export
+write_tibble = function (tbl, path="data.csv", quote=TRUE, sep=",",
+                         parquet_prioritization="fast", overwrite=TRUE) {
+
+    filename = basename(path)
+    filedir = dirname(path)
+    
+    if (!(file.exists(filedir))) {
+        dir.create(filedir, recursive=TRUE)
+    }
+
+    name = gsub("[.].*$", "", filename)
+    format = gsub("^.*[.]", "", filename)
+    filepath = file.path(filedir, filename)
+
+    if (any(class(tbl) == "list")) {
+        N = length(tbl)
+        for (i in 1:N) {
+            write_tibble(tbl[[i]],
+                         path=file.path(filedir, name,
+                                        paste0(names(tbl)[i],
+                                               ".", format)))
+        }
+
+    } else {        
+        if (any(sapply(tbl, is.list))) {
+            tbl = flatten_tibble(tbl)
+        }
+        tbl = dplyr::mutate(tbl,
+                            dplyr::across(
+                                       dplyr::where(
+                                                  is.factor),
+                                       as.character))
+
+        if (file.exists(filepath) & !overwrite) {
+            stop ("Erreur : Path exists and overwrite is FALSE")
+        }
+        
+        if (format == "fst") {
+            fst::write_fst(tbl, filepath, compress=100)
+
+        } else if (format == "Rdata") {
+            save(tbl, file=filepath)
+            
+        } else if (format %in% c("csv", "txt")) {
+            write.csv(tbl, file=filepath,
+                      row.names=FALSE)
+        } else if (format == "parquet") {
+            if (parquet_prioritization == "fast") {
+                arrow::write_parquet(tbl, filepath,
+                                     compression="snappy",
+                                     use_dictionary=TRUE)
+
+            } else if (parquet_prioritization == "space") {
+                arrow::write_parquet(tbl, filepath,
+                                     compression="zstd",
+                                     use_dictionary=TRUE)
+            }
+        }
+    }
+}
+
+# tbl = dplyr::tibble(A=letters[1:3], B=1:3)
+# write_tibble(tbl, "data.csv")
+# tbl_list = list(A=dplyr::tibble(A=letters[1:3]),
+                # B=dplyr::tibble(B=1:3))
+# write_tibble(tbl_list, "data_list.csv")
+
+
+flatten_tibble = function (tbl, delimiter = "; ") {
+    tbl = dplyr::mutate(tbl,
+                        dplyr::across(dplyr::everything(), ~ {
+                            if (is.list(.x)) {
+                                sapply(.x, function(y) {
+                                    paste(unlist(y), collapse=delimiter)
+                                })
+                            } else {
+                                .x
+                            }
+                        }))
+    return (tbl)
+}
+
+
+
+### 1.1. List of dataframe ___________________________________________
+#' @title Write list of dataframe
+#' @export
+write_analyse = function (Ldf, resdir, filedir) {
+    
+    outdir = file.path(resdir, filedir)
+    if (!(file.exists(outdir))) {
+        dir.create(outdir, recursive=TRUE)
+    }
+
+    print(paste('Writing of list of dataframe in : ', outdir, sep=''))
+    
+    Lname = names(Ldf)
+    Nname = length(Lname)
+    for (i in 1:Nname) {
+        outfile = paste(Lname[i], '.txt', sep='')
+        
+        write.table(Ldf[[i]],
+                    file=file.path(outdir, outfile),
+                    sep=";",
+                    quote=TRUE,
+                    row.names=FALSE)
+    }
+}
+
+### 1.2. Dataframe of modified data __________________________________
+#' @title Write dataframe
+#' @export
+write_data = function (data, df_mod, resdir, filedir) {
+
+    Code = rle(sort(df_mod$code))$values
+    
+    outdir = file.path(resdir, filedir)
+    if (!(file.exists(outdir))) {
+        dir.create(outdir, recursive=TRUE)
+    }
+
+    print(paste('Writing of modified data in : ', outdir, sep=''))
+
+    for (code in Code) {
+        data_code = data[data$code == code,]
+        df_mod_code = df_mod[df_mod$code == code,]
+
+        outfile1 = paste(code, '.txt', sep='')
+        write.table(data_code,
+                    file=file.path(outdir, outfile1),
+                    sep=";",
+                    quote=TRUE,
+                    row.names=FALSE)
+
+        outfile2 = paste(code, '_modification', '.txt', sep='')
+        write.table(df_mod_code,
+                    file=file.path(outdir, outfile2),
+                    sep=";",
+                    quote=TRUE,
+                    row.names=FALSE)
+    }
+}
+
+### 1.3. Dataframe of criticism ______________________________________
+#' @title Write criticism
+#' @export
+write_critique = function (df_critique, resdir, filename='critique') {
+
+    outdir = file.path(resdir)
+    if (!(file.exists(outdir))) {
+        dir.create(outdir, recursive=TRUE)
+    }
+
+    print(paste('Writing criticism in : ', outdir, sep=''))
+
+    outfile = paste(filename, '.txt', sep='')
+    write.table(df_critique,
+                file=file.path(outdir, outfile),
+                sep=";",
+                quote=FALSE,
+                row.names=FALSE)   
+}
+# write_critique(df_critique, resdir)
+
+
+### 1.4. Fast for R __________________________________________________
+#' @title Write data dataframe fast
+#' @export
+write_dataFST = function (data, resdir, filedir='fst',
+                          filename='data.fst') {
+    
+    outdir = file.path(resdir, filedir)
+    if (!(file.exists(outdir))) {
+        dir.create(outdir, recursive=TRUE)
+    }
+    outfile = file.path(outdir, filename)
+    fst::write_fst(data, outfile, compress=100)
+}
+
+
+## 2. READING ________________________________________________________
+guess_separator = function(path, n_lines=20, encoding="UTF-8") {
+    # lines = readLines(path, n=n_lines, encoding=encoding)
+    lines = readr::read_lines(path, locale=readr::locale(encoding=encoding))    
+    delimiters = c(",", ";", "\t", "\\s+")
+
+    count_fields = function(delim) {
+        sapply(lines, function(line) {
+            suppressWarnings(length(strsplit(line, delim, fixed=TRUE)[[1]]))
+        })
+    }
+    counts = lapply(delimiters, count_fields)
+
+    variances = sapply(counts, var)
+    means = sapply(counts, mean)
+    variances[means <= 1] = NA
+
+    best_delim = delimiters[which.min(variances)]
+    return (best_delim)
+}
+
+
+is_yyyymmdd_date = function(x) {
+    x = as.character(x)
+    x = x[!is.na(x) & nzchar(x)]
+    if (!length(x)) return(FALSE)
+
+    if (!all(grepl("^[12][0-9]{7}$", x))){
+        return (FALSE)
+    }
+
+    d = as.Date(x, format="%Y%m%d")
+
+    if (any(is.na(d))) {
+        return (FALSE)
+    }
+}
+
+
+is_date_column = function(x,
+                          try_date_format,
+                          success_ratio=0.9) {
+    
+    if (!is.numeric(x) && !is.character(x)) {
+        return(FALSE)
+    }
+
+    x = as.character(x)
+    x = x[!is.na(x) & nzchar(x)]
+    if (!length(x)) return(FALSE)
+
+    d = suppressWarnings(
+        lubridate::parse_date_time(x,
+                                   orders=try_date_format,
+                                   quiet=TRUE)
+    )
+
+    ok = mean(!is.na(d)) >= success_ratio
+    return (ok)
+}
+
+
+
+#' @title read_tibble
+#' @description Reads a file previously writed with [write_tibble()] and return a [dplyr::tibble()] or a list of [dplyr::tibble()].
+#' @param path *character, default="data.csv"*   Path to the file to read.
+#' @details This set of [read_tibble()] and [write_tibble()] functions support `.Rdata`, `.txt` and `.fst` format.
+#' @examples
+#' # load data
+#' data("iris")
+#' # convert data
+#' iris = dplyr::tibble(iris)
+#' iris$Species = as.character(iris$Species)
+#' 
+#' # writes a tibble
+#' write_tibble(iris, path="iris.csv")
+#' # or a list of tibble
+#' iris_setosa = iris[iris$Species == "setosa",]
+#' iris_virginica = iris[iris$Species == "virginica",]
+#' iris_selection = list(setosa=iris_setosa, virginica=iris_virginica)
+#' write_tibble(iris_selection, path="iris_selection.csv")
+#' 
+#' # read with a path
+#' read_tibble(path="iris.csv")
+#' @md
+#' @export
+read_tibble = function (path,
+                        sep=",",
+                        encoding="UTF-8",
+                        guess_sep=FALSE,
+                        guess_text_encoding=FALSE,
+                        try_date_format=c("ymd", "dmy", "mdy",
+                                          "ymd HMS", "dmy HMS", "mdy HMS"),
+                        ...) {
+    
+    path_name = gsub("[.].*$", "", basename(path))
+    path_format = gsub("^.*[.]", "", basename(path))
+    path_dir = file.path(dirname(path),
+                         path_name)
+
+    if (dir.exists(path_dir)) {
+        Paths = list.files(path_dir,
+                           full.names=TRUE)
+        Tbl = list()
+        for (f in Paths) {
+            tbl = read_tibble(path=f,
+                              sep=sep,
+                              encoding=encoding,
+                              guess_sep=guess_sep,
+                              guess_text_encoding=guess_text_encoding,
+                              ...)
+            Tbl = append(Tbl, list(tbl))
+            names(Tbl)[length(Tbl)] = gsub("[.].*$", "",
+                                           basename(f))
+        }
+        return (Tbl)
+        
+    } else {
+        format = gsub("^.*[.]", "", basename(path))
+        
+        if (format == "fst") {
+            tbl = dplyr::tibble(fst::read_fst(path))
+
+        } else if (format == "rds") {
+            tbl = readRDS(path)
+
+        } else if (format == "Rdata") {
+            tmp = load(path)
+            tbl = get(tmp)
+            tbl = as_tibble(tbl)
+            rm (tmp)
+
+        } else if (format %in% c("csv", "txt", "tab")) {
+
+            if (guess_text_encoding) {
+                raw_bytes = readBin(path, "raw",
+                                    file.info(path)$size)
+                encoding = stringi::stri_enc_detect(raw_bytes)
+                encoding = encoding[[1]][1, "Encoding"]
+            }
+
+            if (guess_sep) {
+                sep = guess_separator(path, encoding=encoding)
+            }
+            # print(path)
+            # print(encoding)
+            # print(sep)
+            
+            df = read.csv(file=path, sep=sep,
+                          check.names=FALSE,
+                          fileEncoding=encoding, ...)
+
+            
+            tbl = suppressMessages(
+                tibble::as_tibble(df,.name_repair="unique")
+            )
+            # print(tbl)
+            
+            bad_unnamed = (names(tbl) == "" | is.na(names(tbl)))
+            auto_named = grepl("^\\.\\.\\.\\d+$", names(tbl))
+            drop_auto = auto_named &
+                vapply(tbl, function(x) all(is.na(x) | x == ""), logical(1))
+            drop_cols = bad_unnamed | drop_auto
+            if (any(drop_cols)) {
+                tbl = tbl[, !drop_cols]
+            }
+
+        } else if (format == "parquet") {
+            tbl = dplyr::tibble(arrow::read_parquet(path))
+        
+        } else {
+            stop("Unsupported file format: ", format)
+        }
+
+        for (j in 1:ncol(tbl)) {
+            col = tbl[[j]]
+            if (is_date_column(col, try_date_format)) {
+                tbl[[j]] =
+                    lubridate::as_date(
+                                   lubridate::parse_date_time(
+                                                  as.character(col),
+                                                  orders=try_date_format
+                                              )
+                               )
+            }
+        }
+        
+        return (tbl)
+    }
+}
+
+# read_tibble("data.csv")
+# read_tibble("data_list.csv")
+
+
+### 2.1. List of dataframe ___________________________________________
+#' @title Read list of dataframe
+#' @export
+read_analyse = function (resdir, filedir) {
+
+    outdir = file.path(resdir, filedir)
+    files = list.files(outdir)
+    Nfile = length(files)
+
+    print(paste('Reading of list of dataframe in : ', outdir, sep=''))
+
+    Ldf = list()
+    for (i in 1:Nfile) {
+        name = splitext(files[i])$name
+        
+        df =  as_tibble(read.table(file=file.path(outdir, files[i]),
+                                   header=TRUE,
+                                   sep=";",
+                                   quote='"'))
+
+        for (j in 1:ncol(df)) {
+            if (is.factor(df[[j]])) {
+                d = try(as.Date(df[[1, j]], format="%Y-%m-%d"))
+                test = nchar(as.character(df[[1, j]])) > 10
+                if("try-error" %in% class(d) || is.na(d) | test) {
+                    df[j] = as.character(df[[j]])
+                } else {
+                    df[j] = as.Date(df[[j]])
+                }
+            }
+        }
+        
+        Ldf = append(Ldf, list(df))
+        names(Ldf)[length(Ldf)] = name
+    }
+    return (Ldf)
+}
+
+### 2.2. Dataframe of modified data __________________________________
+#' @title Read dataframe
+#' @export
+read_data = function (resdir, filedir, filename, verbose=TRUE) {
+
+    # Convert the filename in vector
+    filename = c(filename)
+
+    # If the filename is 'all' or regroup more than one filename
+    if (all(filename == 'all') | length(filename) > 1) {
+        # If the filename is 'all'
+        if (all(filename == 'all')) {
+            # Create a filelist to store all the filename
+            filelist = c()
+            # Get all the filename in the data directory selected
+            filelist_tmp = list.files(file.path(resdir,
+                                                filedir))
+
+            # For all the filename in the directory selected
+            for (f in filelist_tmp) {
+                # If the filename extention is 'txt'
+                if (tools::file_ext(f) == 'txt') {
+                    # Store the filename in the filelist
+                    filelist = c(filelist, f) 
+                }
+            }
+            # If the filename regroup more than one filename
+        } else if (length(filename > 1)) {
+            # The filelist correspond to the filename
+            filelist = filename
+        } 
+
+        # Create a blank data frame
+        data = data.frame()
+
+        # For all the file in the filelist
+        for (f in filelist) {
+            # Concatenate by raw data frames created by this function
+            # when filename correspond to only one filename
+            data = rbind(data,
+                         read_data(resdir, 
+                                   filedir, 
+                                   f))
+        }
+        # Set the rownames by default (to avoid strange numbering)
+        rownames(data) = NULL
+        return (data)
+    }
+    
+    # Get the filename from the vector
+    filename = filename[1]
+
+    # Print metadata if asked
+    if (verbose) {
+        print(paste("reading of data for file :", filename))
+    }
+
+    # Get the file path to the data
+    filepath = file.path(resdir, filedir, filename)
+    
+    if (file.exists(filepath) & substr(filepath, nchar(filepath),
+                                       nchar(filepath)) != '/') {
+        # Extract the data as a data frame
+        data = as_tibble(read.table(filepath,
+                                    header=TRUE,
+                                    na.strings=c('NA'),
+                                    sep=';',
+                                    quote='"',
+                                    skip=0))
+
+        for (j in 1:ncol(data)) {
+            if (is.factor(data[[j]])) {
+                d = try(as.Date(data[[1, j]], format="%Y-%m-%d"))
+                if("try-error" %in% class(d) || is.na(d)) {
+                    data[j] = as.character(data[[j]])
+                } else {
+                    data[j] = as.Date(data[[j]])
+                }
+            }
+        }
+        
+        return (data)
+
+    } else {
+        print(paste('filename', filepath, 'do not exist'))
+        return (NULL)
+    }
+}
+
+### 2.3. Dataframe of criticism ______________________________________
+#' @title Read criticism
+#' @export
+read_critique = function (resdir, filename='critique') {
+
+    outdir = file.path(resdir)
+    outfile = paste(filename, '.txt', sep='')
+    filepath = file.path(outdir, outfile)
+    
+    print(paste('Reading criticism in : ', filepath, sep=''))
+    
+    df =  as_tibble(read.table(file=filepath,
+                               header=TRUE,
+                               sep=";"))
+    
+    for (j in 1:ncol(df)) {
+        if (is.factor(df[[j]])) {
+            d = try(as.Date(df[[1, j]], format="%Y-%m-%d"))
+            if("try-error" %in% class(d) || is.na(d)) {
+                df[j] = as.character(df[[j]])
+            } else {
+                df[j] = as.Date(df[[j]])
+            }
+        }
+    }
+
+    return (df)
+}
+# df_critique = read_critique(resdir)
+
+### 2.4. Fast for R __________________________________________________
+#' @title Read dataframe fast
+#' @export
+read_tibbleFST = function (filedir, filename) {
+    filepath = file.path(filedir, filename)
+    df = tibble(fst::read_fst(filepath))
+    return (df)
+}
+
+read_shp = function (path) {
+    shp = st_read(path)
+    shp = st_transform(shp, 2154) 
+    return (shp)
+}
+
+
+#' @title convert path
+#' @export
+convert_path = function (path, output_format="fst") {
+    output_path = paste0(tools::file_path_sans_ext(path),
+                         ".", output_format)
+    return (output_path)
+}
+
+
+check_if_id = function (col) {
+    # Check if it's numeric or integer
+    if (!is.numeric(col) && !is.integer(col)) {
+        return (FALSE)
+    }
+    # Check if it's sequential starting from 1
+    if (all(col == seq_len(length(col)))) {
+        return (TRUE)
+    }
+    # Check if it's sequential (not necessarily starting from 1)
+    diffs = diff(col)
+    if (length(unique(diffs)) == 1 && unique(diffs) == 1) {
+        return (TRUE)
+    }
+    return (FALSE)
+}
+
+clean_tibble = function (tbl,
+                         convert_to_NA=NULL,
+                         remove_id_col=TRUE,
+                         remove_NA_col=TRUE) {
+    if (!is.null(convert_to_NA)) {
+        tbl = dplyr::mutate(tbl,
+                            dplyr::across(dplyr::everything(),
+                                          ~ ifelse(. %in% convert_to_NA,
+                                                   NA, .)))
+    }
+    if (remove_id_col) {
+        tbl = dplyr::select(tbl, !dplyr::where(~ all(check_if_id(.x))))
+    }
+    if (remove_NA_col) {
+        tbl = dplyr::select(tbl, !dplyr::where(~ all(is.na(.x))))
+    }
+    return (tbl)
+}
+
+
+#' @title convert tibble
+#' @export
+convert_tibble = function (path,
+                           output_path=NULL, output_format="csv",
+                           read_sep=",",
+                           read_encoding="UTF-8",
+                           read_guess_sep=FALSE,
+                           read_guess_text_encoding=FALSE,
+                           convert_to_NA=NULL,
+                           remove_id_col=FALSE,
+                           remove_NA_col=FALSE,
+                           write_sep=",",
+                           write_quote=TRUE,
+                           write_parquet_prioritization="fast",
+                           overwrite=TRUE) {
+    if (is.null(output_path)) {
+        output_path = convert_path(path, output_format)
+    }
+
+    tbl = read_tibble(path,
+                      sep=read_sep,
+                      encoding=read_encoding,
+                      guess_sep=read_guess_sep,
+                      guess_text_encoding=read_guess_text_encoding)
+
+    tbl = clean_tibble(tbl,
+                       convert_to_NA=convert_to_NA,
+                       remove_id_col=remove_id_col,
+                       remove_NA_col=remove_NA_col)
+    
+    write_tibble(tbl, output_path,
+                 sep=write_sep,
+                 quote=write_quote,
+                 parquet_prioritization=write_parquet_prioritization,
+                 overwrite=overwrite)
+}
