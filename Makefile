@@ -6,7 +6,7 @@ check:
 	R -e 'devtools::check()'
 
 install:
-	R -e 'remotes::install_github("louis-heraut/safran-not-satan")'
+	R -e 'remotes::install_github("louis-heraut/fairy")'
 
 github_check:
 	R -e 'usethis::use_github_action_check_standard()'
